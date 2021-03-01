@@ -8,17 +8,13 @@ replace github.com/justmiles/standup-bot/lib/configs => ./lib/configs
 
 replace github.com/justmiles/standup-bot/lib/standup => ./lib/standup
 
+go 1.15
+
 require (
-	github.com/aws/aws-sdk-go v1.19.15
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/aws/aws-sdk-go v1.37.21
 	github.com/dustin/go-humanize v1.0.0
-	github.com/go-chat-bot/bot v0.0.0-20181007231045-cf9880602203
-	github.com/go-chat-bot/plugins v0.0.0-20181008204345-f5bd5fb31f12
-	github.com/lucasb-eyer/go-colorful v1.0.2
-	github.com/lusis/go-slackbot v0.0.0-20180109053408-401027ccfef5 // indirect
-	github.com/lusis/slack-test v0.0.0-20190408224659-6cf59653add2 // indirect
-	github.com/nlopes/slack v0.4.0
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/stretchr/testify v1.2.2 // indirect
-	golang.org/x/net v0.0.0-20190311183353-d8887717615a // indirect
+	github.com/go-chat-bot/bot v0.0.0-20201004141219-763f9eeac7d5
+	github.com/go-chat-bot/plugins v0.0.0-20201024114236-00ff43fcf77f
+	github.com/lucasb-eyer/go-colorful v1.2.0
+	github.com/slack-go/slack v0.8.1
 )

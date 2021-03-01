@@ -6,6 +6,12 @@ import (
 	"sync"
 )
 
+var (
+	// ErrProtocolServerMismatch server && proto must match
+	ErrProtocolServerMismatch = errors.New("the specified protocol and server do not correspond to this bot instance")
+	errNoChannelSpecified     = errors.New("no channel was specified for this message")
+)
+
 // Cmd holds the parsed user's input for easier handling of commands
 type Cmd struct {
 	Raw         string       // Raw is full string passed to the command
@@ -35,8 +41,9 @@ func (c *ChannelData) URI() string {
 
 // Message holds the message info - for IRC and Slack networks, this can include whether the message was an action.
 type Message struct {
-	Text     string // The actual content of this Message
-	IsAction bool   // True if this was a '/me does something' message
+	Text     string      // The actual content of this Message
+	IsAction bool        // True if this was a '/me does something' message
+	ProtoMsg interface{} // The underlying object that we got from the protocol pkg
 }
 
 // FilterCmd holds information about what is output being filtered - message and
@@ -58,9 +65,11 @@ type PassiveCmd struct {
 
 // PeriodicConfig holds a cron specification for periodically notifying the configured channels
 type PeriodicConfig struct {
-	CronSpec string                               // CronSpec that schedules some function
-	Channels []string                             // A list of channels to notify
-	CmdFunc  func(channel string) (string, error) // func to be executed at the period specified on CronSpec
+	Version   int
+	CronSpec  string                               // CronSpec that schedules some function
+	Channels  []string                             // A list of channels to notify, ignored for V2
+	CmdFunc   func(channel string) (string, error) // func to be executed at the period specified on CronSpec
+	CmdFuncV2 func() ([]CmdResult, error)          // func v2 to be executed at the period specified on CronSpec
 }
 
 // User holds user id, nick and real name
@@ -69,6 +78,20 @@ type User struct {
 	Nick     string
 	RealName string
 	IsBot    bool
+}
+
+// MessageStream allows event information to be transmitted to an arbitrary channel
+// https://github.com/go-chat-bot/bot/issues/97
+type MessageStream struct {
+	Data chan MessageStreamMessage
+	// Done is almost never called, usually the bot should just leave the chan open
+	Done chan bool
+}
+
+// MessageStreamMessage the actual Message passed back to MessageStream in a chan
+type MessageStreamMessage struct {
+	Message     string
+	ChannelData *ChannelData
 }
 
 type customCommand struct {
@@ -86,15 +109,17 @@ type customCommand struct {
 
 // CmdResult is the result message of V2 commands
 type CmdResult struct {
-	Channel string // The channel where the bot should send the message
-	Message string // The message to be sent
+	Channel     string // The channel where the bot should send the message
+	Message     string // The message to be sent
+	ProtoParams interface{}
 }
 
 // CmdResultV3 is the result message of V3 commands
 type CmdResultV3 struct {
-	Channel string
-	Message chan string
-	Done    chan bool
+	Channel     string
+	Message     chan string
+	Done        chan bool
+	ProtoParams interface{}
 }
 
 const (
@@ -121,11 +146,36 @@ type activeCmdFuncV3 func(cmd *Cmd) (CmdResultV3, error)
 
 type filterCmdFuncV1 func(cmd *FilterCmd) (string, error)
 
+type messageStreamFunc func(ms *MessageStream) error
+
+type messageStreamSyncMap struct {
+	sync.RWMutex
+	messageStreams map[messageStreamKey]*MessageStream
+}
+type messageStreamKey struct {
+	StreamName string
+	Server     string
+	Protocol   string
+}
+
+// messageStreamConfig holds the registered function for the streamname
+type messageStreamConfig struct {
+	version    int
+	streamName string
+	msgFunc    messageStreamFunc
+}
+
 var (
 	commands         = make(map[string]*customCommand)
 	passiveCommands  = make(map[string]*customCommand)
 	filterCommands   = make(map[string]*customCommand)
 	periodicCommands = make(map[string]PeriodicConfig)
+
+	messageStreamConfigs []*messageStreamConfig
+
+	msMap = &messageStreamSyncMap{
+		messageStreams: make(map[messageStreamKey]*MessageStream),
+	}
 )
 
 // RegisterCommand adds a new command to the bot.
@@ -166,6 +216,19 @@ func RegisterCommandV3(command, description, exampleArgs string, cmdFunc activeC
 		Description: description,
 		ExampleArgs: exampleArgs,
 	}
+}
+
+// RegisterMessageStream adds a new message stream to the bot.
+// The command should be registered in the Init() func of your package
+// MessageStreams send messages to a channel
+// streamName: String used to identify the command, for internal use only (ex: webhook)
+// messageStreamFunc: Function which will be executed. It will received a MessageStream with a chan to push
+func RegisterMessageStream(streamName string, msgFunc messageStreamFunc) {
+	messageStreamConfigs = append(messageStreamConfigs, &messageStreamConfig{
+		version:    v1,
+		streamName: streamName,
+		msgFunc:    msgFunc,
+	})
 }
 
 // RegisterPassiveCommand adds a new passive command to the bot.
@@ -214,8 +277,19 @@ func RegisterFilterCommand(command string, cmdFunc filterCmdFuncV1) {
 // RegisterPeriodicCommand adds a command that is run periodically.
 // The command should be registered in the Init() func of your package
 // config: PeriodicConfig which specify CronSpec and a channel list
-// cmdFunc: A no-arg function which gets triggered periodically
+// cmdFunc: A function with single string argument (channel) which gets triggered periodically
 func RegisterPeriodicCommand(command string, config PeriodicConfig) {
+	config.Version = v1
+	periodicCommands[command] = config
+}
+
+// RegisterPeriodicCommandV2 adds a command that is run periodically.
+// The command should be registered in the Init() func of your package
+// config: PeriodicConfig which specifies CronSpec
+// cmdFuncV2: A no-arg function which gets triggered periodically
+// It should return slice of CmdResults (channel and message to send to it)
+func RegisterPeriodicCommandV2(command string, config PeriodicConfig) {
+	config.Version = v2
 	periodicCommands[command] = config
 }
 
@@ -245,7 +319,11 @@ func (b *Bot) executePassiveCommands(cmd *PassiveCmd) {
 				if err != nil {
 					b.errored(fmt.Sprintf("Error executing %s", cmdFunc.Cmd), err)
 				} else {
-					b.SendMessage(cmd.Channel, result, cmd.User)
+					b.SendMessage(OutgoingMessage{
+						Target:  cmd.Channel,
+						Message: result,
+						Sender:  cmd.User,
+					})
 				}
 			case pv2:
 				result, err := cmdFunc.PassiveFuncV2(cmd)
@@ -257,7 +335,12 @@ func (b *Bot) executePassiveCommands(cmd *PassiveCmd) {
 					select {
 					case message := <-result.Message:
 						if message != "" {
-							b.SendMessage(result.Channel, message, cmd.User)
+							b.SendMessage(OutgoingMessage{
+								Target:      result.Channel,
+								Message:     message,
+								Sender:      cmd.User,
+								ProtoParams: result.ProtoParams,
+							})
 						}
 					case <-result.Done:
 						return
@@ -307,7 +390,11 @@ func (b *Bot) handleCmd(c *Cmd) {
 		message, err := cmd.CmdFuncV1(c)
 		b.checkCmdError(err, c)
 		if message != "" {
-			b.SendMessage(c.Channel, message, c.User)
+			b.SendMessage(OutgoingMessage{
+				Target:  c.Channel,
+				Message: message,
+				Sender:  c.User,
+			})
 		}
 	case v2:
 		result, err := cmd.CmdFuncV2(c)
@@ -317,7 +404,12 @@ func (b *Bot) handleCmd(c *Cmd) {
 		}
 
 		if result.Message != "" {
-			b.SendMessage(result.Channel, result.Message, c.User)
+			b.SendMessage(OutgoingMessage{
+				Target:      result.Channel,
+				Message:     result.Message,
+				Sender:      c.User,
+				ProtoParams: result.ProtoParams,
+			})
 		}
 	case v3:
 		result, err := cmd.CmdFuncV3(c)
@@ -329,7 +421,12 @@ func (b *Bot) handleCmd(c *Cmd) {
 			select {
 			case message := <-result.Message:
 				if message != "" {
-					b.SendMessage(result.Channel, message, c.User)
+					b.SendMessage(OutgoingMessage{
+						Target:      result.Channel,
+						Message:     message,
+						Sender:      c.User,
+						ProtoParams: result.ProtoParams,
+					})
 				}
 			case <-result.Done:
 				return
@@ -342,6 +439,47 @@ func (b *Bot) checkCmdError(err error, c *Cmd) {
 	if err != nil {
 		errorMsg := fmt.Sprintf(errorExecutingCommand, c.Command, err.Error())
 		b.errored(errorMsg, err)
-		b.SendMessage(c.Channel, errorMsg, c.User)
+		b.SendMessage(OutgoingMessage{
+			Target:  c.Channel,
+			Message: errorMsg,
+			Sender:  c.User,
+		})
+	}
+}
+
+// handleMessageStream
+// if there are two bots (telegram, irc) and three messsages(a, b, c) then there will be six entries in messageStreams[key]
+// when a message is sent into a chan it has a good chance of arriving at the wrong bot instance
+// for every message we check to see if it matched this b.Protocol and b.Server
+// if it doesn't we lookup the entry in messageStreams[key] send it to *that* Data chan
+func (b *Bot) handleMessageStream(streamName string, ms *MessageStream) {
+	for {
+		select {
+		case d := <-ms.Data:
+
+			if d.ChannelData.Protocol != b.Protocol || d.ChannelData.Server != b.Server {
+				// then lookup who it *should* be sent to and send it back into *that* chan
+				key := messageStreamKey{Protocol: d.ChannelData.Protocol, Server: d.ChannelData.Server, StreamName: streamName}
+				msMap.RLock()
+				msMap.messageStreams[key].Data <- d
+				msMap.RUnlock()
+				continue
+			}
+
+			// this message is meant for us!
+
+			if d.ChannelData.Channel == "" {
+				b.errored("handleMessageStream: "+d.Message, errNoChannelSpecified)
+				continue
+			}
+			if d.Message != "" {
+				b.SendMessage(OutgoingMessage{
+					Target:  d.ChannelData.Channel,
+					Message: d.Message,
+				})
+			}
+		case <-ms.Done:
+			return
+		}
 	}
 }
