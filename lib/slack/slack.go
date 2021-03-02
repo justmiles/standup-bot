@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	"github.com/go-chat-bot/bot"
-	"github.com/slack-go/slack"
+	"github.com/nlopes/slack"
 )
 
 // MessageFilter allows implementing a filter function to transform the messages
 // before sending to the channel, it is run before the bot sends the message to slack
-type MessageFilter func(string, *bot.User) []slack.MsgOption
+type MessageFilter func(string, *bot.User) (string, slack.PostMessageParameters)
 
 var (
 	rtm      *slack.RTM
@@ -19,18 +19,18 @@ var (
 	teaminfo *slack.TeamInfo
 
 	channelList                 = map[string]slack.Channel{}
-	params                      = []slack.MsgOption{slack.MsgOptionAsUser(true)}
+	params                      = slack.PostMessageParameters{AsUser: true}
 	messageFilter MessageFilter = defaultMessageFilter
 	botUserID                   = ""
 )
 
-func defaultMessageFilter(message string, _ *bot.User) []slack.MsgOption {
-	return append(params, slack.MsgOptionText(message, false))
+func defaultMessageFilter(message string, _ *bot.User) (string, slack.PostMessageParameters) {
+	return message, params
 }
 
 func responseHandler(target string, message string, sender *bot.User) {
-	msgOptions := messageFilter(message, sender)
-	api.PostMessage(target, msgOptions...)
+	message, params := messageFilter(message, sender)
+	api.PostMessage(target, message, params)
 }
 
 // FindUserBySlackID converts a slack.User into a bot.User struct
@@ -122,12 +122,11 @@ func RunWithFilter(token string, customMessageFilter MessageFilter) {
 func Run(token string) {
 	api = slack.New(token)
 	rtm = api.NewRTM()
+	teaminfo, _ = api.GetTeamInfo()
 
-	teaminfo, _ := api.GetTeamInfo()
-
-	b := bot.New(
-		&bot.Handlers{Response: responseHandler},
-		&bot.Config{Protocol: "slack", Server: teaminfo.Domain})
+	b := bot.New(&bot.Handlers{
+		Response: responseHandler,
+	})
 
 	b.Disable([]string{"url"})
 
