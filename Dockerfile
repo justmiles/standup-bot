@@ -2,7 +2,7 @@ FROM golang:1.12-stretch as builder
 
 COPY . /app
 WORKDIR /app
-RUN CGO_ENABLED=0 GOOS=linux go build -mod vendor -a -installsuffix cgo .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo .
 RUN md5sum standup-bot
 
 # Create image from scratch

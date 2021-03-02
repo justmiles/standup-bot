@@ -1,0 +1,47 @@
+before:
+  hooks:
+    - go mod download
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - windows
+      - linux
+    binary: standup-bot
+
+dockers:
+  - goos: linux
+    goarch: amd64
+    image_templates:
+      - "justmiles/standup-bot:latest"
+      - "justmiles/standup-bot:{{ .Tag }}"
+      - "justmiles/standup-bot:v{{ .Major }}"
+
+    skip_push: false
+    use_buildx: false
+    extra_files:
+      - go.mod
+      - go.sum
+      - LICENSE
+      - main.go
+      - lib
+      - vendor
+
+archives:
+  - replacements:
+      386: i386
+      amd64: x86_64
+checksum:
+  name_template: "checksums.txt"
+snapshot:
+  name_template: "{{ .Tag }}"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^scratch:"
