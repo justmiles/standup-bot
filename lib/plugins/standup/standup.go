@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-chat-bot/bot"
 	"github.com/lucasb-eyer/go-colorful"
-	"github.com/nlopes/slack"
+	"github.com/slack-go/slack"
 )
 
 var api = slack.New(c.Get("SLACK_TOKEN", "", true))            // Bot User OAuth Access Token
@@ -68,14 +68,10 @@ func shareStandupNotesRequest(command *bot.Cmd) (msg string, err error) {
 
 func shareStandupNotes(standupChannel string) (string, error) {
 
-	_, _, err := api.PostMessage(standupChannel, "", slack.PostMessageParameters{
-		LinkNames: 1,
-		Attachments: []slack.Attachment{
-			slack.Attachment{
-				Pretext: header,
-			},
-		},
-	})
+	_, _, err := api.PostMessage(
+		standupChannel,
+		slack.MsgOptionText("", false),
+		slack.MsgOptionAttachments(slack.Attachment{Pretext: header}))
 
 	if err != nil {
 		fmt.Printf("Error posting standup header: %s\n", err)
@@ -112,17 +108,18 @@ func shareStandupNotes(standupChannel string) (string, error) {
 				}
 			}
 
-			_, _, err = api.PostMessage(standupChannel, "", slack.PostMessageParameters{
-				UnfurlLinks: true,
-				LinkNames:   1,
-				Attachments: []slack.Attachment{
-					slack.Attachment{
-						Title: fmt.Sprintf("%s standup notes:", user.RealName),
-						Text:  fmt.Sprintf(strings.Join(reverse(notes), "\n")),
-						Color: colorful.FastHappyColor().Hex(),
-					},
-				},
-			})
+			attachments := []slack.Attachment{
+				slack.Attachment{
+					Title: fmt.Sprintf("%s standup notes:", user.RealName),
+					Text:  fmt.Sprintf(strings.Join(reverse(notes), "\n")),
+					Color: colorful.FastHappyColor().Hex(),
+				}}
+
+			_, _, err = api.PostMessage(
+				standupChannel,
+				slack.MsgOptionText("", false),
+				slack.MsgOptionEnableLinkUnfurl(),
+				slack.MsgOptionAttachments(attachments...))
 
 			if err != nil {
 				fmt.Printf("Error posting standup report: %s\n", err)
@@ -151,17 +148,18 @@ func getConversations() (map[string]slack.Channel, error) {
 }
 
 func getUserIDsInSlackChannel(channelID string) ([]string, error) {
-	channelInfo, err := api.GetChannelInfo(channelID)
+	members, _, err := api.GetUsersInConversation(&slack.GetUsersInConversationParameters{ChannelID: channelID})
 
-	if channelInfo == nil {
-		return nil, fmt.Errorf("channel %s is not a valid channel. Is it a public channel? Is this bot in that channel?", channelID)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
 	}
 
-	if len(channelInfo.Members) == 0 {
+	if len(members) == 0 {
 		return nil, fmt.Errorf("there are no users in channel %s", channelID)
 	}
 
-	return channelInfo.Members, err
+	return members, err
 }
 
 func getUsersInSlackChannel(channelID string) (map[string]*slack.User, error) {

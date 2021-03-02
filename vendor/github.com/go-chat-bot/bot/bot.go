@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/robfig/cron"
+	"github.com/robfig/cron/v3"
 )
 
 const (
@@ -27,23 +27,59 @@ type Bot struct {
 	disabledCmds []string
 	msgsToSend   chan responseMessage
 	done         chan struct{}
+
+	// Protocol and Server are used by MesssageStreams to
+	// determine if this is the correct bot to send a message on
+	// see:
+	// https://github.com/go-chat-bot/bot/issues/37#issuecomment-277661159
+	// https://github.com/go-chat-bot/bot/issues/97#issuecomment-442827599
+	Protocol string
+	// Server and Protocol are used by MesssageStreams to
+	// determine if this is the correct bot to send a message on
+	// see:
+	// https://github.com/go-chat-bot/bot/issues/37#issuecomment-277661159
+	// https://github.com/go-chat-bot/bot/issues/97#issuecomment-442827599
+	Server string
+}
+
+// Config configuration for this Bot instance
+type Config struct {
+	// Protocol and Server are used by MesssageStreams to
+	/// determine if this is the correct bot to send a message on
+	Protocol string
+	// Server and Protocol are used by MesssageStreams to
+	// determine if this is the correct bot to send a message on
+	Server string
 }
 
 type responseMessage struct {
 	target, message string
 	sender          *User
+	protoParams     interface{}
+}
+
+// OutgoingMessage collects all the information for a message to go out.
+type OutgoingMessage struct {
+	Target      string
+	Message     string
+	Sender      *User
+	ProtoParams interface{}
 }
 
 // ResponseHandler must be implemented by the protocol to handle the bot responses
 type ResponseHandler func(target, message string, sender *User)
+
+// ResponseHandlerV2 may be implemented by the protocol to handle the bot responses
+type ResponseHandlerV2 func(OutgoingMessage)
 
 // ErrorHandler will be called when an error happens
 type ErrorHandler func(msg string, err error)
 
 // Handlers that must be registered to receive callbacks from the bot
 type Handlers struct {
-	Response ResponseHandler
-	Errored  ErrorHandler
+	Response   ResponseHandler
+	ResponseV2 ResponseHandlerV2
+	Errored    ErrorHandler
 }
 
 func logErrorHandler(msg string, err error) {
@@ -51,7 +87,7 @@ func logErrorHandler(msg string, err error) {
 }
 
 // New configures a new bot instance
-func New(h *Handlers) *Bot {
+func New(h *Handlers, bc *Config) *Bot {
 	if h.Errored == nil {
 		h.Errored = logErrorHandler
 	}
@@ -61,26 +97,75 @@ func New(h *Handlers) *Bot {
 		cron:       cron.New(),
 		msgsToSend: make(chan responseMessage, MsgBuffer),
 		done:       make(chan struct{}),
+		Protocol:   bc.Protocol,
+		Server:     bc.Server,
 	}
 
 	// Launch the background goroutine that isolates the possibly non-threadsafe
 	// message sending logic of the underlying transport layer.
 	go b.processMessages()
 
+	b.startMessageStreams()
+
 	b.startPeriodicCommands()
 	return b
+}
+
+func (b *Bot) startMessageStreams() {
+	for _, v := range messageStreamConfigs {
+
+		go func(b *Bot, config *messageStreamConfig) {
+			msMap.Lock()
+			ms := &MessageStream{
+				Data: make(chan MessageStreamMessage),
+				Done: make(chan bool),
+			}
+			var err = config.msgFunc(ms)
+			if err != nil {
+				b.errored("MessageStream "+config.streamName+" failed ", err)
+			}
+			msKey := messageStreamKey{
+				Protocol:   b.Protocol,
+				Server:     b.Server,
+				StreamName: config.streamName,
+			}
+			// thread safe write
+			msMap.messageStreams[msKey] = ms
+			msMap.Unlock()
+			b.handleMessageStream(config.streamName, ms)
+		}(b, v)
+	}
 }
 
 func (b *Bot) startPeriodicCommands() {
 	for _, config := range periodicCommands {
 		func(b *Bot, config PeriodicConfig) {
 			b.cron.AddFunc(config.CronSpec, func() {
-				for _, channel := range config.Channels {
-					message, err := config.CmdFunc(channel)
+				switch config.Version {
+				case v1:
+					for _, channel := range config.Channels {
+						message, err := config.CmdFunc(channel)
+						if err != nil {
+							b.errored("Periodic command failed ", err)
+						} else if message != "" {
+							b.SendMessage(OutgoingMessage{
+								Target:  channel,
+								Message: message,
+							})
+						}
+					}
+				case v2:
+					results, err := config.CmdFuncV2()
 					if err != nil {
 						b.errored("Periodic command failed ", err)
-					} else if message != "" {
-						b.SendMessage(channel, message, nil)
+						return
+					}
+					for _, result := range results {
+						b.SendMessage(OutgoingMessage{
+							Target:      result.Channel,
+							Message:     result.Message,
+							ProtoParams: result.ProtoParams,
+						})
 					}
 				}
 			})
@@ -93,9 +178,13 @@ func (b *Bot) startPeriodicCommands() {
 
 // MessageReceived must be called by the protocol upon receiving a message
 func (b *Bot) MessageReceived(channel *ChannelData, message *Message, sender *User) {
-	command, err := parse(message.Text, channel, sender)
+	command, err := parse(message, channel, sender)
 	if err != nil {
-		b.SendMessage(channel.Channel, err.Error(), sender)
+		b.SendMessage(OutgoingMessage{
+			Target:  channel.Channel,
+			Message: err.Error(),
+			Sender:  sender,
+		})
 		return
 	}
 
@@ -122,22 +211,40 @@ func (b *Bot) MessageReceived(channel *ChannelData, message *Message, sender *Us
 	}
 }
 
-// SendMessage queues a message for a target recipient, optionally from a particular sender.
-func (b *Bot) SendMessage(target string, message string, sender *User) {
-	message = b.executeFilterCommands(&FilterCmd{
-		Target: target,
-		Message: message,
-		User: sender})
+// SendMessage queues a message.
+func (b *Bot) SendMessage(om OutgoingMessage) {
+	message := b.executeFilterCommands(&FilterCmd{
+		Target:  om.Target,
+		Message: om.Message,
+		User:    om.Sender,
+	})
+	if message == "" {
+		return
+	}
 
 	select {
-	case b.msgsToSend <- responseMessage{target, message, sender}:
+	case b.msgsToSend <- responseMessage{
+		target:      om.Target,
+		message:     message,
+		sender:      om.Sender,
+		protoParams: om.ProtoParams,
+	}:
 	default:
 		b.errored("Failed to queue message to send.", errors.New("Too busy"))
 	}
 }
 
-func (b *Bot) sendResponse(target, message string, sender *User) {
-	b.handlers.Response(target, message, sender)
+func (b *Bot) sendResponse(resp responseMessage) {
+	if b.handlers.ResponseV2 != nil {
+		b.handlers.ResponseV2(OutgoingMessage{
+			Message:     resp.message,
+			ProtoParams: resp.protoParams,
+			Sender:      resp.sender,
+			Target:      resp.target,
+		})
+		return
+	}
+	b.handlers.Response(resp.target, resp.message, resp.sender)
 }
 
 func (b *Bot) errored(msg string, err error) {
@@ -150,7 +257,7 @@ func (b *Bot) processMessages() {
 	for {
 		select {
 		case msg := <-b.msgsToSend:
-			b.sendResponse(msg.target, msg.message, msg.sender)
+			b.sendResponse(msg)
 		case <-b.done:
 			return
 		}
