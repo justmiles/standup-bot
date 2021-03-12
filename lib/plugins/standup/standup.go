@@ -56,10 +56,22 @@ func init() {
 		"",
 		shareStandupNotesRequest,
 	)
+	// bot.RegisterPassiveCommand("standup", log)
+	bot.RegisterCommand(
+		"solicit",
+		"Solicit participants for their standup notes",
+		"",
+		solicitStandupNotesRequest,
+	)
 
 }
+
 func solicitStandupNotes(channel string) (string, error) {
 	return solicitStandupMessage, nil
+}
+
+func solicitStandupNotesRequest(command *bot.Cmd) (msg string, err error) {
+	return solicitStandupNotes(command.Channel)
 }
 
 func shareStandupNotesRequest(command *bot.Cmd) (msg string, err error) {
