@@ -1,17 +1,15 @@
-FROM golang:1.12-stretch as builder
+FROM golang:1.16-alpine
 
-COPY . /app
 WORKDIR /app
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo .
-RUN md5sum standup-bot
 
-# Create image from scratch
-FROM scratch
+COPY lib lib
+COPY go.mod go.mod
+COPY go.sum go.sum
+COPY main.go main.go
+COPY LICENSE LICENSE
 
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /app/standup-bot /standup-bot
-COPY --from=builder /tmp /tmp
+RUN go mod download
 
-ENV AWS_DEFAULT_REGION us-east-1
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o /standup-bot
 
-ENTRYPOINT ["/standup-bot"]
+CMD [ "/standup-bot" ]

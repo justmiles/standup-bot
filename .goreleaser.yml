@@ -21,14 +21,13 @@ dockers:
       - "justmiles/standup-bot:v{{ .Major }}"
 
     skip_push: false
-    use_buildx: false
+    use: buildx
     extra_files:
       - go.mod
       - go.sum
       - LICENSE
       - main.go
       - lib
-      - vendor
 
 archives:
   - replacements:

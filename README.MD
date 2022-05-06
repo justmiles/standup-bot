@@ -1,26 +1,52 @@
-# standup-bot
+**Description**
 
-## Getting started
+This is a simple standup bot for slack.
 
-- [install go](https://golang.org/doc/install)
-- export any required environment variables
-- run with `make dev`
+**Setup**
 
-## Environment Configs
+1. Create standup bot with `app-manifest.yaml` file provided in the root of this directory
+1. Get bot and bot user tokens and set environment variables defined in `lib/config/main.go`
+1. Set up s3 bucket and provide AWS Creds if you would like standup settings to persists between restarts
 
-If you set `SSM_PATH` config values are pull from SSM. Values in SSM are the same as below.
+**Docker**
 
-- `SSM_PATH` - Pull configs from SSM using this SSM path
-- `SLACK_TOKEN` - API token used to auth against Slack as a bot user
-- `OAUTH_SLACK_TOKEN` - API token used to auth against Slack using oauth. Required for non-bot API scope
-- `SLACK_GROUP` - Name of Slack group containing participating users
-- `SLACK_CHANNEL` - Channel ID to post standup notes in
-- `CRON_SOLICIT_STANDUP` - cron expression in UTC to solicit for standup notes. example, "0 0 13 * * mon-fri", // 8AM central
-- `CRON_SHARE_STANDUP` - cron expression in UTC to share standup notes to the main channel. example, "0 0 13 * * mon-fri", // 8AM central
-- `STANDUP_MESSAGE` - optionally customize the message sent to users when soliciting for standup notes
-- `SHAME_PARTICIPANTS` - if set to "true" post a message when user doesn't particiapte in the standup
+```bash
+# quickstart
+docker run \
+    -e SLACK_BOT_TOKEN=xoxb-blahblah \
+    -e SLACK_APP_TOKEN=xapp-blahblah \
+    -t justmiles/standup-bot
 
-## Roadmap
+# with persistant brain
+docker run \
+    -e SLACK_BOT_TOKEN=xoxb-blahblah \
+    -e SLACK_APP_TOKEN=xapp-blahblah \
+    -e S3_BRAIN_BUCKET=some_s3_bucket \
+    -e S3_BRAIN_KEY=brain.json \
+    -e AWS_REGION \
+	-e AWS_ACCESS_KEY_ID \
+	-e AWS_SECRET_ACCESS_KEY \
+	-e AWS_SESSION_TOKEN \
+    -t justmiles/standup-bot
+```
 
-- [x] instead of sourcing partificpans by Slack Group, just message everyone in the `SLACK_CHANNEL`
-- [x] add property `STANDUP_MESSAGE` to customize the message sent to users when solociting standup notes
+**Configure your bot**
+
+In slack just type `/standup`
+
+**Test your bot**
+
+In a channel type the below commands - this will create a mock standup with you as the sole participant.
+`/standup solicit`
+`/standup share`
+
+**Users in multiple standups Scenarios**
+
+If User recieves a standup solicitation from multiple channel configurations at the same time, then:
+- If User replies as normal, then both standups will receive the same notes.
+- If user replies in thread, then only the thread response will be used for the standup notes.
+
+**Roadmap**
+
+- Provide terraform module for quick setup in fargate
+- Update readme with a "how to"

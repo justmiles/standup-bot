@@ -1,4 +1,2 @@
-standup-bot
-.vscode
-.env.sh
+.env
 dist

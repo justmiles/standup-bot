@@ -1,0 +1,25 @@
+{
+    "title": {
+        "type": "plain_text",
+        "text": "Standup Settings",
+        "emoji": true
+    },
+    "submit": {
+        "type": "plain_text",
+        "text": "Save",
+        "emoji": true
+    },
+    "type": "modal",
+    "callback_id": "modal_standup_settings",
+    "blocks": [
+        {
+            "type": "header",
+            "block_id": "standup_channel_header",
+            "text": {
+                "type": "plain_text",
+                "text": "Select a Channel to Configure",
+                "emoji": true
+            }
+        }
+    ]
+}
