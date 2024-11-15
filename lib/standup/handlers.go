@@ -22,6 +22,7 @@ func handleSlashCommand(cmd slack.SlashCommand) {
 		if len(settings.Participants) == 0 {
 			settings.Participants = []string{cmd.UserID}
 			settings.Shame = true
+			settings.Freeze = false
 		}
 		getSolicitStandupFunc(settings)()
 	case "share":
@@ -30,6 +31,7 @@ func handleSlashCommand(cmd slack.SlashCommand) {
 		if len(settings.Participants) == 0 {
 			settings.Participants = []string{cmd.UserID}
 			settings.Shame = true
+			settings.Freeze = false
 		}
 		getShareStandupFunc(settings)()
 	default:
@@ -69,6 +71,7 @@ func submitSettingsModal(payload slack.InteractionCallback) {
 	shareTime := strings.Split(payload.View.State.Values[views.ModalShareTimeBlockId][views.ModalShareTimeActionId].SelectedTime, ":")
 	meetingDays := payload.View.State.Values[views.ModalMeetingDaysBlockId][views.ModalMeetingDaysActionId].SelectedOptions
 	shame, _ := strconv.ParseBool(payload.View.State.Values[views.ModalShameBlockId][views.ModalShameActionId].SelectedOption.Value)
+	freeze, _ := strconv.ParseBool(payload.View.State.Values[views.ModalFreezeBlockId][views.ModalFreezeActionId].SelectedOption.Value)
 	solicitMsg := payload.View.State.Values[views.ModalSolicitMessgaeBlockId][views.ModalSolicitMessageActionId].Value
 
 	settings := types.StandupSettings{
@@ -77,6 +80,7 @@ func submitSettingsModal(payload slack.InteractionCallback) {
 		ShareCronSpec:   fmt.Sprintf("%s %s * * %s", shareTime[1], shareTime[0], meetingDaysToCron(meetingDays)),
 		SolicitMsg:      solicitMsg,
 		Shame:           shame,
+		Freeze:          freeze,
 		Participants:    participants,
 	}
 

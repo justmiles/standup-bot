@@ -8,6 +8,7 @@ type StandupSettings struct {
 	ShareCronSpec   string   `json:"shareCronSpec"`
 	SolicitMsg      string   `json:"solicitMsg"`
 	Shame           bool     `json:"shame"`
+	Freeze          bool     `json:"freeze"`
 	Participants    []string `json:"participants"` // List of slack user ids
 }
 

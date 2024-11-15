@@ -44,6 +44,10 @@ func getSolicitStandupFunc(settings types.StandupSettings) func() {
 	return func() {
 		// declare settings within function scope
 		settings := settings
+
+		if settings.Freeze {
+			return
+		}
 		for _, userId := range settings.Participants {
 			bot.PostMessage(userId, settings.SolicitMsg)
 		}
@@ -54,6 +58,10 @@ func getShareStandupFunc(settings types.StandupSettings) func() {
 	return func() {
 		// declare settings within function scope
 		settings := settings
+
+		if settings.Freeze {
+			return
+		}
 
 		bot.PostMessage(settings.ChannelID, header)
 
